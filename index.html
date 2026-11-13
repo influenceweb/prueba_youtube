@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lector Web</title>
+<style>
+  :root { --bg:#f5f5f4; --panel:#fff; --borde:#e2e2e0; --texto:#1c1c1a; --suave:#6b6b66; --acento:#2563eb; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#141413; --panel:#1f1f1d; --borde:#33332f; --texto:#ececea; --suave:#9a9a94; --acento:#60a5fa; }
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: system-ui, -apple-system, sans-serif; background:var(--bg); color:var(--texto); }
+  header { padding:16px 24px; font-weight:600; font-size:18px; }
+  main { display:grid; grid-template-columns: 1fr 1.6fr; gap:16px; padding:0 24px 24px; height:calc(100vh - 60px); }
+  @media (max-width: 760px) { main { grid-template-columns:1fr; height:auto; padding:0 16px 16px; } }
+  .caja { background:var(--panel); border:1px solid var(--borde); border-radius:12px; display:flex; flex-direction:column; min-height:0; }
+  .caja h2 { margin:0; padding:12px 16px; font-size:14px; color:var(--suave); border-bottom:1px solid var(--borde); font-weight:500; }
+  #historial { flex:1; overflow:auto; padding:12px 16px; display:flex; flex-direction:column; gap:8px; }
+  .burbuja { align-self:flex-end; background:var(--acento); color:#fff; padding:8px 12px; border-radius:12px; max-width:90%; word-break:break-all; cursor:pointer; font-size:14px; }
+  form { display:flex; gap:8px; padding:12px; border-top:1px solid var(--borde); }
+  input { flex:1; padding:10px 12px; border-radius:8px; border:1px solid var(--borde); background:var(--bg); color:var(--texto); font-size:15px; }
+  button { padding:10px 16px; border:0; border-radius:8px; background:var(--acento); color:#fff; font-size:15px; cursor:pointer; }
+  button:disabled { opacity:.5; cursor:wait; }
+  #resultado { flex:1; overflow:auto; padding:16px 20px; line-height:1.55; }
+  #resultado h3 { margin:0 0 4px; font-size:20px; }
+  #resultado h4 { margin:20px 0 6px; font-size:13px; text-transform:uppercase; letter-spacing:.04em; color:var(--suave); }
+  #resultado a { color:var(--acento); word-break:break-all; }
+  #resultado ul { padding-left:18px; margin:0; }
+  .vacio, .error { color:var(--suave); }
+  .error { color:#dc2626; }
+  .resumen { white-space:pre-wrap; }
+  .h2 { padding-left:12px; } .h3 { padding-left:24px; }
+</style>
+</head>
+<body>
+<header>Lector Web</header>
+<main>
+  <section class="caja">
+    <h2>Escribe una dirección web</h2>
+    <div id="historial"></div>
+    <form id="form">
+      <input id="url" placeholder="Link de YouTube o cualquier página" autocomplete="off" autofocus>
+      <button id="boton">Leer</button>
+    </form>
+  </section>
+  <section class="caja">
+    <h2>Información de la página</h2>
+    <div id="resultado"><p class="vacio">Aquí aparecerá la información de la página.</p></div>
+  </section>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+$('form').addEventListener('submit', e => {
+  e.preventDefault();
+  const url = $('url').value.trim();
+  if (!url) return;
+  const b = document.createElement('div');
+  b.className = 'burbuja'; b.textContent = url; b.title = 'Volver a leer';
+  b.onclick = () => leer(url);
+  $('historial').appendChild(b);
+  $('historial').scrollTop = 1e9;
+  $('url').value = '';
+  leer(url);
+});
+
+const esYouTube = u => /(youtube\.com|youtu\.be)\//i.test(u);
+
+async function leer(url) {
+  $('boton').disabled = true;
+  if (esYouTube(url)) return resumir(url);
+  $('resultado').innerHTML = '<p class="vacio">Leyendo…</p>';
+  try {
+    const r = await fetch('/api/leer?url=' + encodeURIComponent(url));
+    const d = await r.json();
+    if (d.error) throw new Error(d.error);
+    let h = `<h3>${esc(d.titulo || 'Sin título')}</h3><a href="${esc(d.url)}" target="_blank">${esc(d.url)}</a>`;
+    if (d.descripcion) h += `<h4>Descripción</h4><p>${esc(d.descripcion)}</p>`;
+    if (d.encabezados.length) h += '<h4>Encabezados</h4>' + d.encabezados.map(x => `<div class="${x.nivel}">${esc(x.texto)}</div>`).join('');
+    if (d.parrafos.length) h += '<h4>Contenido</h4>' + d.parrafos.map(p => `<p>${esc(p)}</p>`).join('');
+    if (d.enlaces.length) h += '<h4>Enlaces</h4><ul>' + d.enlaces.map(l => `<li><a href="${esc(l)}" target="_blank">${esc(l)}</a></li>`).join('') + '</ul>';
+    $('resultado').innerHTML = h;
+  } catch (err) {
+    $('resultado').innerHTML = `<p class="error">No se pudo leer la página: ${esc(err.message)}</p>`;
+  } finally {
+    $('boton').disabled = false;
+    $('resultado').scrollTop = 0;
+  }
+}
+
+// Links de YouTube: se mandan al webhook de n8n y se muestra el resumen
+async function resumir(url) {
+  $('resultado').innerHTML = '<p class="vacio">Enviando a n8n… el resumen puede tardar un minuto.</p>';
+  try {
+    const r = await fetch('/api/resumen?url=' + encodeURIComponent(url));
+    const d = await r.json();
+    if (d.error) throw new Error(d.error);
+    const html = esc(d.resumen).replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+    $('resultado').innerHTML = `<h4>Resumen de YouTube (n8n)</h4><div class="resumen">${html}</div>`;
+  } catch (err) {
+    $('resultado').innerHTML = `<p class="error">No se pudo resumir el video: ${esc(err.message)}</p>`;
+  } finally {
+    $('boton').disabled = false;
+    $('resultado').scrollTop = 0;
+  }
+}
+</script>
+</body>
+</html>
